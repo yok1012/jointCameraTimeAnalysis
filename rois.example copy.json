@@ -1,0 +1,44 @@
+[
+  {
+    "name": "upper",
+    "x_min": 464,
+    "x_max": 509,
+    "y_min": 154,
+    "y_max": 177
+  },
+  {
+    "name": "middle",
+    "x_min": 464,
+    "x_max": 509,
+    "y_min": 175,
+    "y_max": 197
+  },
+  {
+    "name": "bottom",
+    "x_min": 464,
+    "x_max": 509,
+    "y_min": 197,
+    "y_max": 218
+  },
+  {
+    "name": "all_area",
+    "x_min": 464,
+    "x_max": 508,
+    "y_min": 154,
+    "y_max": 217
+  },
+  {
+    "name": "reft",
+    "x_min": 464,
+    "x_max": 486,
+    "y_min": 154,
+    "y_max": 217
+  },
+  {
+    "name": "right",
+    "x_min": 487,
+    "x_max": 509,
+    "y_min": 154,
+    "y_max": 217
+  }
+]

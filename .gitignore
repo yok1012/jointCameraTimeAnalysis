@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 仮想環境
+.venv/
+venv/
+env/
+
+# 入力データ（大容量CSVはリポジトリに含めない）
+input/
+
+# 分析出力（生成物はリポジトリに含めない）
+output/
+output_*/
+outputs/
+heatmap_output/
+heatmap_output_*/
+frames/
+
+# 生成画像・GIF
+*.gif
+rois.png
+rois_crops.png
+roi_preview.png
+roi_preview_crops.png
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Jupyter
+.ipynb_checkpoints/
