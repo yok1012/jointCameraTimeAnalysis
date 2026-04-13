@@ -21,6 +21,15 @@ heatmap_output/
 heatmap_output_*/
 frames/
 
+# ROI自動保存
+rois_saved.json
+
+# 保存済み分析
+saved_analyses/
+
+# アプリ設定
+settings.ini
+
 # 生成画像・GIF
 *.gif
 rois.png

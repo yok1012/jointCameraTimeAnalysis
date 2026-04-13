@@ -20,7 +20,7 @@ from PIL import Image
 
 SUPPORTED_ENCODINGS = ("cp932", "shift_jis", "utf-8-sig", "utf-8")
 METRICS = ("mean", "std", "variance")
-MAX_ROIS = 10
+MAX_ROIS = 30
 
 
 @dataclass(frozen=True)
@@ -30,14 +30,16 @@ class ROI:
     x_max: int
     y_min: int
     y_max: int
+    enabled: bool = True
 
-    def to_dict(self) -> dict[str, int | str]:
+    def to_dict(self) -> dict[str, int | str | bool]:
         return {
             "name": self.name,
             "x_min": self.x_min,
             "x_max": self.x_max,
             "y_min": self.y_min,
             "y_max": self.y_max,
+            "enabled": self.enabled,
         }
 
 
@@ -473,17 +475,29 @@ def validate_rois(rois: list[ROI], x_coords: np.ndarray, y_coords: np.ndarray) -
             )
 
 
-def summarize_frames(frames: Iterable[FrameData], rois: list[ROI]) -> list[dict[str, object]]:
+def summarize_frames(
+    frames: Iterable[FrameData],
+    rois: list[ROI],
+    x_offset_left: int = 0,
+    x_offset_right: int = 0,
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for frame in frames:
         for roi in rois:
-            region = extract_roi_region(frame, roi)
+            region = extract_roi_region(frame, roi, x_offset_left, x_offset_right)
             rows.extend(build_metric_rows(frame, roi, region))
     return rows
 
 
-def extract_roi_region(frame: FrameData, roi: ROI) -> np.ndarray:
-    x_mask = (frame.x_coords >= roi.x_min) & (frame.x_coords <= roi.x_max)
+def extract_roi_region(
+    frame: FrameData,
+    roi: ROI,
+    x_offset_left: int = 0,
+    x_offset_right: int = 0,
+) -> np.ndarray:
+    effective_x_min = roi.x_min + x_offset_left
+    effective_x_max = roi.x_max - x_offset_right
+    x_mask = (frame.x_coords >= effective_x_min) & (frame.x_coords <= effective_x_max)
     y_mask = (frame.y_coords >= roi.y_min) & (frame.y_coords <= roi.y_max)
     if not x_mask.any() or not y_mask.any():
         raise ValueError(f"ROI {roi.name} does not overlap frame coordinates")
@@ -600,7 +614,7 @@ def draw_heatmap(ax, frame: FrameData, cmap: str, vmin: float, vmax: float, inve
 
 
 def draw_roi_overlays(ax, rois: list[ROI]) -> None:
-    colors = plt.cm.tab10.colors
+    colors = plt.cm.tab20.colors
     for index, roi in enumerate(rois):
         color = colors[index % len(colors)]
         patch = Rectangle(
@@ -631,15 +645,22 @@ def render_roi_crops(
     vmin: float,
     vmax: float,
     invert_y: bool = False,
+    x_offset_left: int = 0,
+    x_offset_right: int = 0,
 ) -> None:
     columns = min(2, len(rois))
     rows = int(np.ceil(len(rois) / columns))
     fig, axes = plt.subplots(rows, columns, figsize=(5 * columns, 4 * rows), squeeze=False)
     flat_axes = axes.flatten()
     for axis, roi in zip(flat_axes, rois, strict=False):
-        region = extract_roi_region(frame, roi)
+        region = extract_roi_region(frame, roi, x_offset_left, x_offset_right)
         image = axis.imshow(region, origin="lower", aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
-        axis.set_title(f"{roi.name}: x={roi.x_min}-{roi.x_max}, y={roi.y_min}-{roi.y_max}")
+        effective_x_min = roi.x_min + x_offset_left
+        effective_x_max = roi.x_max - x_offset_right
+        title = f"{roi.name}: x={effective_x_min}-{effective_x_max}, y={roi.y_min}-{roi.y_max}"
+        if x_offset_left or x_offset_right:
+            title += f" (offset L:{x_offset_left} R:{x_offset_right})"
+        axis.set_title(title)
         axis.set_xlabel("local x")
         axis.set_ylabel("local y")
         if invert_y:
@@ -853,7 +874,7 @@ class InteractiveROISelector:
         print(f"Removed ROI '{removed.name}'")
 
     def draw_single_roi(self, ax, roi: ROI) -> None:
-        color = plt.cm.tab10.colors[len(self.patches) % len(plt.cm.tab10.colors)]
+        color = plt.cm.tab20.colors[len(self.patches) % len(plt.cm.tab20.colors)]
         patch = Rectangle(
             (roi.x_min - 0.5, roi.y_min - 0.5),
             roi.x_max - roi.x_min + 1,
