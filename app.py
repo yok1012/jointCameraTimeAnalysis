@@ -50,6 +50,8 @@ _SETTINGS_SCHEMA: dict[str, tuple[str, type]] = {
     "output_base": ("outputs", str),
     "crop_x_offset_left": ("0", int),
     "crop_x_offset_right": ("0", int),
+    "crop_y_offset_top": ("0", int),
+    "crop_y_offset_bottom": ("0", int),
 }
 
 
@@ -201,6 +203,8 @@ _DEFAULTS: dict[str, object] = {
     "editing_roi_index": -1,
     "crop_x_offset_left": _saved.get("crop_x_offset_left", 0),
     "crop_x_offset_right": _saved.get("crop_x_offset_right", 0),
+    "crop_y_offset_top": _saved.get("crop_y_offset_top", 0),
+    "crop_y_offset_bottom": _saved.get("crop_y_offset_bottom", 0),
     "loaded_analysis": None,
 }
 for key, value in _DEFAULTS.items():
@@ -543,32 +547,61 @@ with tabs[1]:
         y_hi = int(rep_frame.y_coords.max())
 
         st.subheader("切り出しオフセット設定")
-        st.caption("グリッド分割・手動追加時にX方向を左右から狭めるピクセル数を指定します。ROI座標に直接反映されます。")
-        _offset_max = max(0, (x_hi - x_lo) // 2)
-        off_col1, off_col2, off_col3 = st.columns([1, 1, 2])
-        with off_col1:
+        st.caption("グリッド分割・手動追加時にX・Y方向を狭めるピクセル数を指定します。ROI座標に直接反映されます。")
+
+        # ── X方向オフセット ──
+        _x_offset_max = max(0, (x_hi - x_lo) // 2)
+        xoff_col1, xoff_col2, xoff_col3 = st.columns([1, 1, 2])
+        with xoff_col1:
             crop_x_offset_left = st.number_input(
                 "左オフセット（px）",
-                min_value=0, max_value=_offset_max,
-                value=min(int(st.session_state["crop_x_offset_left"]), _offset_max),
+                min_value=0, max_value=_x_offset_max,
+                value=min(int(st.session_state["crop_x_offset_left"]), _x_offset_max),
                 step=1, key="crop_x_offset_left_input",
             )
             st.session_state["crop_x_offset_left"] = crop_x_offset_left
-        with off_col2:
+        with xoff_col2:
             crop_x_offset_right = st.number_input(
                 "右オフセット（px）",
-                min_value=0, max_value=_offset_max,
-                value=min(int(st.session_state["crop_x_offset_right"]), _offset_max),
+                min_value=0, max_value=_x_offset_max,
+                value=min(int(st.session_state["crop_x_offset_right"]), _x_offset_max),
                 step=1, key="crop_x_offset_right_input",
             )
             st.session_state["crop_x_offset_right"] = crop_x_offset_right
-        with off_col3:
+        with xoff_col3:
             eff_x_lo = x_lo + crop_x_offset_left
             eff_x_hi = x_hi - crop_x_offset_right
             if eff_x_lo < eff_x_hi:
                 st.metric("適用後のX範囲", f"{eff_x_lo} – {eff_x_hi}")
             else:
                 st.error("オフセットが大きすぎます（左右の合計がX幅を超えています）")
+
+        # ── Y方向オフセット ──
+        _y_offset_max = max(0, (y_hi - y_lo) // 2)
+        yoff_col1, yoff_col2, yoff_col3 = st.columns([1, 1, 2])
+        with yoff_col1:
+            crop_y_offset_top = st.number_input(
+                "上オフセット（px）",
+                min_value=0, max_value=_y_offset_max,
+                value=min(int(st.session_state["crop_y_offset_top"]), _y_offset_max),
+                step=1, key="crop_y_offset_top_input",
+            )
+            st.session_state["crop_y_offset_top"] = crop_y_offset_top
+        with yoff_col2:
+            crop_y_offset_bottom = st.number_input(
+                "下オフセット（px）",
+                min_value=0, max_value=_y_offset_max,
+                value=min(int(st.session_state["crop_y_offset_bottom"]), _y_offset_max),
+                step=1, key="crop_y_offset_bottom_input",
+            )
+            st.session_state["crop_y_offset_bottom"] = crop_y_offset_bottom
+        with yoff_col3:
+            eff_y_lo = y_lo + crop_y_offset_bottom
+            eff_y_hi = y_hi - crop_y_offset_top
+            if eff_y_lo < eff_y_hi:
+                st.metric("適用後のY範囲", f"{eff_y_lo} – {eff_y_hi}")
+            else:
+                st.error("オフセットが大きすぎます（上下の合計がY幅を超えています）")
         save_settings(st.session_state)
 
         # ── グリッド分割 ROI ──────────────────────────────────────────
@@ -579,6 +612,15 @@ with tabs[1]:
                 "X・Y方向を等間隔に分割してROIを一括生成します。"
                 "分割プレビューがヒートマップ上に破線で表示されます。"
             )
+            # オフセット変更時はグリッド範囲を自動同期
+            _curr_eff = (eff_x_lo, eff_x_hi, eff_y_lo, eff_y_hi)
+            if st.session_state.get("_prev_eff_range") != _curr_eff:
+                st.session_state["gx1"] = eff_x_lo
+                st.session_state["gx2"] = eff_x_hi
+                st.session_state["gy1"] = eff_y_lo
+                st.session_state["gy2"] = eff_y_hi
+                st.session_state["_prev_eff_range"] = _curr_eff
+
             g_col1, g_col2, g_col3 = st.columns(3)
             with g_col1:
                 grid_mode = st.radio(
@@ -587,11 +629,11 @@ with tabs[1]:
                     key="grid_mode",
                 )
             with g_col2:
-                grid_x_min = st.number_input("X範囲 min", value=eff_x_lo, min_value=x_lo, max_value=x_hi, key="gx1")
-                grid_x_max = st.number_input("X範囲 max", value=eff_x_hi, min_value=x_lo, max_value=x_hi, key="gx2")
+                grid_x_min = st.number_input("X範囲 min", min_value=x_lo, max_value=x_hi, key="gx1")
+                grid_x_max = st.number_input("X範囲 max", min_value=x_lo, max_value=x_hi, key="gx2")
             with g_col3:
-                grid_y_min = st.number_input("Y範囲 min", value=y_lo, min_value=y_lo, max_value=y_hi, key="gy1")
-                grid_y_max = st.number_input("Y範囲 max", value=y_hi, min_value=y_lo, max_value=y_hi, key="gy2")
+                grid_y_min = st.number_input("Y範囲 min", min_value=y_lo, max_value=y_hi, key="gy1")
+                grid_y_max = st.number_input("Y範囲 max", min_value=y_lo, max_value=y_hi, key="gy2")
 
             remaining = MAX_ROIS - len(st.session_state["rois"])
 
@@ -607,21 +649,29 @@ with tabs[1]:
 
             d_col1, d_col2 = st.columns(2)
 
+            # ピクセル数入力の初期値を保持（オフセット変更時にリセットさせない）
+            for _pk, _pr in [("gy_px", y_range), ("gx_px", x_range),
+                             ("gx_px2", x_range), ("gy_px2", y_range)]:
+                if _pk not in st.session_state:
+                    st.session_state[_pk] = max(1, _pr // 2)
+                else:
+                    st.session_state[_pk] = max(1, min(st.session_state[_pk], _pr))
+
             if input_method == "ピクセル数で指定":
                 # ── ピクセル数指定モード ──
                 if grid_mode == "X固定 → Y分割":
                     x_divs = 1
-                    y_px = d_col1.number_input("Y方向 1ROIあたりのピクセル数", min_value=1, max_value=y_range, value=max(1, y_range // 2), key="gy_px")
+                    y_px = d_col1.number_input("Y方向 1ROIあたりのピクセル数", min_value=1, max_value=y_range, key="gy_px")
                     y_divs = max(1, y_range // y_px)
                     d_col1.caption(f"→ Y {y_divs} 分割（端数は最後のROIに含まれます）")
                 elif grid_mode == "Y固定 → X分割":
-                    x_px = d_col1.number_input("X方向 1ROIあたりのピクセル数", min_value=1, max_value=x_range, value=max(1, x_range // 2), key="gx_px")
+                    x_px = d_col1.number_input("X方向 1ROIあたりのピクセル数", min_value=1, max_value=x_range, key="gx_px")
                     x_divs = max(1, x_range // x_px)
                     y_divs = 1
                     d_col1.caption(f"→ X {x_divs} 分割（端数は最後のROIに含まれます）")
                 else:
-                    x_px = d_col1.number_input("X方向 1ROIあたりのピクセル数", min_value=1, max_value=x_range, value=max(1, x_range // 2), key="gx_px2")
-                    y_px = d_col2.number_input("Y方向 1ROIあたりのピクセル数", min_value=1, max_value=y_range, value=max(1, y_range // 2), key="gy_px2")
+                    x_px = d_col1.number_input("X方向 1ROIあたりのピクセル数", min_value=1, max_value=x_range, key="gx_px2")
+                    y_px = d_col2.number_input("Y方向 1ROIあたりのピクセル数", min_value=1, max_value=y_range, key="gy_px2")
                     x_divs = max(1, x_range // x_px)
                     y_divs = max(1, y_range // y_px)
                     d_col1.caption(f"→ X {x_divs} 分割")

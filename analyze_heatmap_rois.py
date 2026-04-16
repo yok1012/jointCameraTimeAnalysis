@@ -480,11 +480,13 @@ def summarize_frames(
     rois: list[ROI],
     x_offset_left: int = 0,
     x_offset_right: int = 0,
+    y_offset_top: int = 0,
+    y_offset_bottom: int = 0,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for frame in frames:
         for roi in rois:
-            region = extract_roi_region(frame, roi, x_offset_left, x_offset_right)
+            region = extract_roi_region(frame, roi, x_offset_left, x_offset_right, y_offset_top, y_offset_bottom)
             rows.extend(build_metric_rows(frame, roi, region))
     return rows
 
@@ -494,11 +496,15 @@ def extract_roi_region(
     roi: ROI,
     x_offset_left: int = 0,
     x_offset_right: int = 0,
+    y_offset_top: int = 0,
+    y_offset_bottom: int = 0,
 ) -> np.ndarray:
     effective_x_min = roi.x_min + x_offset_left
     effective_x_max = roi.x_max - x_offset_right
+    effective_y_min = roi.y_min + y_offset_bottom
+    effective_y_max = roi.y_max - y_offset_top
     x_mask = (frame.x_coords >= effective_x_min) & (frame.x_coords <= effective_x_max)
-    y_mask = (frame.y_coords >= roi.y_min) & (frame.y_coords <= roi.y_max)
+    y_mask = (frame.y_coords >= effective_y_min) & (frame.y_coords <= effective_y_max)
     if not x_mask.any() or not y_mask.any():
         raise ValueError(f"ROI {roi.name} does not overlap frame coordinates")
     return frame.heatmap[np.ix_(y_mask, x_mask)]
@@ -647,19 +653,23 @@ def render_roi_crops(
     invert_y: bool = False,
     x_offset_left: int = 0,
     x_offset_right: int = 0,
+    y_offset_top: int = 0,
+    y_offset_bottom: int = 0,
 ) -> None:
     columns = min(2, len(rois))
     rows = int(np.ceil(len(rois) / columns))
     fig, axes = plt.subplots(rows, columns, figsize=(5 * columns, 4 * rows), squeeze=False)
     flat_axes = axes.flatten()
     for axis, roi in zip(flat_axes, rois, strict=False):
-        region = extract_roi_region(frame, roi, x_offset_left, x_offset_right)
+        region = extract_roi_region(frame, roi, x_offset_left, x_offset_right, y_offset_top, y_offset_bottom)
         image = axis.imshow(region, origin="lower", aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
         effective_x_min = roi.x_min + x_offset_left
         effective_x_max = roi.x_max - x_offset_right
-        title = f"{roi.name}: x={effective_x_min}-{effective_x_max}, y={roi.y_min}-{roi.y_max}"
-        if x_offset_left or x_offset_right:
-            title += f" (offset L:{x_offset_left} R:{x_offset_right})"
+        effective_y_min = roi.y_min + y_offset_bottom
+        effective_y_max = roi.y_max - y_offset_top
+        title = f"{roi.name}: x={effective_x_min}-{effective_x_max}, y={effective_y_min}-{effective_y_max}"
+        if x_offset_left or x_offset_right or y_offset_top or y_offset_bottom:
+            title += f" (offset L:{x_offset_left} R:{x_offset_right} T:{y_offset_top} B:{y_offset_bottom})"
         axis.set_title(title)
         axis.set_xlabel("local x")
         axis.set_ylabel("local y")
