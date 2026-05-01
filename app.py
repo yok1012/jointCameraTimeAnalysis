@@ -872,13 +872,14 @@ with tabs[1]:
                 y_lo = int(rep_frame.y_coords.min())
                 y_hi = int(rep_frame.y_coords.max())
                 for i, roi in enumerate(rois):
+                    rkey = roi.name  # 名前ベースのキー（ユニーク保証済み）
                     status_mark = "" if roi.enabled else " [OFF]"
                     with st.expander(f"#{i + 1}: {roi.name}{status_mark}  (x:{roi.x_min}-{roi.x_max}, y:{roi.y_min}-{roi.y_max})"):
                         # 分析対象チェックボックス
                         new_enabled = st.checkbox(
                             "分析に含める",
                             value=roi.enabled,
-                            key=f"enable_roi_{i}",
+                            key=f"enable_roi_{rkey}",
                         )
                         if new_enabled != roi.enabled:
                             updated = ROI(name=roi.name, x_min=roi.x_min, x_max=roi.x_max,
@@ -889,7 +890,7 @@ with tabs[1]:
                             save_rois_to_file(new_rois)
                             st.rerun()
                         # 編集フォーム
-                        new_name = st.text_input("名前", value=roi.name, key=f"edit_name_{i}")
+                        new_name = st.text_input("名前", value=roi.name, key=f"edit_name_{rkey}")
                         ec1, ec2 = st.columns(2)
                         clamped_xmin = max(x_lo, min(roi.x_min, x_hi))
                         clamped_xmax = max(x_lo, min(roi.x_max, x_hi))
@@ -898,12 +899,12 @@ with tabs[1]:
                         if (clamped_xmin != roi.x_min or clamped_xmax != roi.x_max
                                 or clamped_ymin != roi.y_min or clamped_ymax != roi.y_max):
                             st.warning("ROI座標がフレーム範囲外です。値がクランプされています。")
-                        new_xmin = ec1.number_input("x_min", value=clamped_xmin, min_value=x_lo, max_value=x_hi, key=f"edit_x1_{i}")
-                        new_xmax = ec1.number_input("x_max", value=clamped_xmax, min_value=x_lo, max_value=x_hi, key=f"edit_x2_{i}")
-                        new_ymin = ec2.number_input("y_min", value=clamped_ymin, min_value=y_lo, max_value=y_hi, key=f"edit_y1_{i}")
-                        new_ymax = ec2.number_input("y_max", value=clamped_ymax, min_value=y_lo, max_value=y_hi, key=f"edit_y2_{i}")
+                        new_xmin = ec1.number_input("x_min", value=clamped_xmin, min_value=x_lo, max_value=x_hi, key=f"edit_x1_{rkey}")
+                        new_xmax = ec1.number_input("x_max", value=clamped_xmax, min_value=x_lo, max_value=x_hi, key=f"edit_x2_{rkey}")
+                        new_ymin = ec2.number_input("y_min", value=clamped_ymin, min_value=y_lo, max_value=y_hi, key=f"edit_y1_{rkey}")
+                        new_ymax = ec2.number_input("y_max", value=clamped_ymax, min_value=y_lo, max_value=y_hi, key=f"edit_y2_{rkey}")
                         btn_c1, btn_c2 = st.columns(2)
-                        if btn_c1.button("保存", key=f"save_roi_{i}", type="primary"):
+                        if btn_c1.button("保存", key=f"save_roi_{rkey}", type="primary"):
                             # 名前重複チェック (自分自身は除く)
                             if any(r.name == new_name for j, r in enumerate(rois) if j != i):
                                 st.error(f"ROI名 '{new_name}' は既に使われています")
@@ -912,6 +913,10 @@ with tabs[1]:
                             elif new_ymin >= new_ymax:
                                 st.error("y_min < y_max にしてください")
                             else:
+                                # 名前変更時は旧キーのウィジェット状態をクリア
+                                if new_name != roi.name:
+                                    for suffix in ("enable_roi_", "edit_name_", "edit_x1_", "edit_x2_", "edit_y1_", "edit_y2_"):
+                                        st.session_state.pop(f"{suffix}{rkey}", None)
                                 updated = ROI(name=new_name, x_min=new_xmin, x_max=new_xmax,
                                               y_min=new_ymin, y_max=new_ymax, enabled=new_enabled)
                                 new_rois = list(rois)
@@ -920,7 +925,10 @@ with tabs[1]:
                                 save_rois_to_file(new_rois)
                                 st.session_state["canvas_key_counter"] += 1
                                 st.rerun()
-                        if btn_c2.button("削除", key=f"del_roi_{i}"):
+                        if btn_c2.button("削除", key=f"del_roi_{rkey}"):
+                            # 削除されるROIのウィジェット状態をクリア
+                            for suffix in ("enable_roi_", "edit_name_", "edit_x1_", "edit_x2_", "edit_y1_", "edit_y2_"):
+                                st.session_state.pop(f"{suffix}{rkey}", None)
                             st.session_state["rois"] = [r for j, r in enumerate(rois) if j != i]
                             save_rois_to_file(st.session_state["rois"])
                             st.session_state["canvas_key_counter"] += 1
@@ -1032,12 +1040,54 @@ with tabs[2]:
                     ys = [float(r["value"]) for r in series]
                     ax.plot(xs, ys, marker="o", label=roi.name)
                 ax.set_ylabel(metric)
-                ax.legend(loc="best")
                 ax.grid(True, alpha=0.3)
             axes[-1].set_xlabel("timestamp" if use_ts else "frame index")
             fig.suptitle("ROI time-series statistics")
+            handles, labels = axes[0].get_legend_handles_labels()
+            if handles:
+                ncol = max(1, min(len(handles), 6))
+                fig.legend(handles, labels, loc="lower center",
+                           bbox_to_anchor=(0.5, 0), ncol=ncol, fontsize="small")
             fig.tight_layout()
+            fig.subplots_adjust(bottom=0.08 + 0.03 * ((len(rois) - 1) // 6))
             st.pyplot(fig)
+
+            # ── ROI温度データ表 ──
+            st.divider()
+            st.subheader("ROI温度データ表")
+            import pandas as pd
+
+            metric_label = {"mean": "平均", "std": "標準偏差", "variance": "分散"}
+            selected_metric = st.selectbox(
+                "表示メトリクス",
+                list(metric_label.keys()),
+                format_func=lambda m: f"{metric_label[m]} ({m})",
+                key="table_metric",
+            )
+
+            metric_rows = [r for r in rows if r["metric"] == selected_metric]
+            df_long = pd.DataFrame(metric_rows)
+            pivot = df_long.pivot(
+                index=["frame_index", "timestamp"],
+                columns="roi_name",
+                values="value",
+            )
+            pivot = pivot.reset_index()
+            pivot = pivot.sort_values("frame_index")
+            roi_col_order = [r.name for r in rois if r.name in pivot.columns]
+            pivot = pivot[["frame_index", "timestamp"] + roi_col_order]
+            pivot.columns.name = None
+
+            st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+            tsv_text = pivot.to_csv(sep="\t", index=False)
+            st.caption("Excel貼り付け用（下のテキストを Ctrl+A → Ctrl+C でコピー）")
+            st.text_area(
+                "TSV",
+                value=tsv_text,
+                height=min(400, 60 + 25 * len(pivot)),
+                label_visibility="collapsed",
+            )
 
             # ── 基準ROIとの差分グラフ ──
             st.divider()
@@ -1084,11 +1134,16 @@ with tabs[2]:
                                     label=f"{roi.name} − {base_roi_name}")
                     ax.set_ylabel(f"Δ {metric}")
                     ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
-                    ax.legend(loc="best")
                     ax.grid(True, alpha=0.3)
                 axes_d[-1].set_xlabel("timestamp" if use_ts else "frame index")
                 fig_d.suptitle(f"Difference from {base_roi_name}")
+                handles_d, labels_d = axes_d[0].get_legend_handles_labels()
+                if handles_d:
+                    ncol_d = max(1, min(len(handles_d), 6))
+                    fig_d.legend(handles_d, labels_d, loc="lower center",
+                                 bbox_to_anchor=(0.5, 0), ncol=ncol_d, fontsize="small")
                 fig_d.tight_layout()
+                fig_d.subplots_adjust(bottom=0.08 + 0.03 * ((len(other_rois) - 1) // 6))
                 st.pyplot(fig_d)
 
                 # 差分グラフも保存
