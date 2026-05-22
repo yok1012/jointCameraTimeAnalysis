@@ -48,10 +48,31 @@ _SETTINGS_SCHEMA: dict[str, tuple[str, type]] = {
     "invert_y": ("False", bool),
     "time_axis": ("index", str),
     "output_base": ("outputs", str),
+    "dataset_name": ("", str),
     "crop_x_offset_left": ("0", int),
     "crop_x_offset_right": ("0", int),
     "crop_y_offset_top": ("0", int),
     "crop_y_offset_bottom": ("0", int),
+    # グリッド分割UI
+    "grid_mode": ("X固定 → Y分割", str),
+    "grid_input_method": ("分割数で指定", str),
+    "grid_prefix": ("grid", str),
+    "grid_reverse_x": ("False", bool),
+    "grid_reverse_y": ("False", bool),
+    "gx_px": ("10", int),
+    "gy_px": ("10", int),
+    "gx_px2": ("10", int),
+    "gy_px2": ("10", int),
+    "gx_divs": ("2", int),
+    "gy_divs": ("2", int),
+    "gx_divs2": ("2", int),
+    "gy_divs2": ("2", int),
+    "grid_use_selection": ("False", bool),
+    # 表示・分析
+    "table_metric": ("mean", str),
+    "frame_step": ("1", int),
+    "skip_gif": ("False", bool),
+    "viz_crop_enabled": ("False", bool),
 }
 
 
@@ -195,7 +216,7 @@ _DEFAULTS: dict[str, object] = {
     "invert_y": _saved.get("invert_y", False),
     "time_axis": _saved.get("time_axis", "index"),
     "output_base": _saved.get("output_base", "outputs"),
-    "dataset_name": "",
+    "dataset_name": _saved.get("dataset_name", ""),
     "session_dir": None,
     "frame_index_for_roi": 0,
     "canvas_key_counter": 0,
@@ -206,6 +227,28 @@ _DEFAULTS: dict[str, object] = {
     "crop_y_offset_top": _saved.get("crop_y_offset_top", 0),
     "crop_y_offset_bottom": _saved.get("crop_y_offset_bottom", 0),
     "loaded_analysis": None,
+    # グリッド分割UI（key付きwidgetが直接読み出すため事前にsession_stateへ流し込む）
+    "grid_mode": _saved.get("grid_mode", "X固定 → Y分割"),
+    "grid_input_method": _saved.get("grid_input_method", "分割数で指定"),
+    "grid_prefix": _saved.get("grid_prefix", "grid"),
+    "grid_reverse_x": _saved.get("grid_reverse_x", False),
+    "grid_reverse_y": _saved.get("grid_reverse_y", False),
+    "gx_px": _saved.get("gx_px", 10),
+    "gy_px": _saved.get("gy_px", 10),
+    "gx_px2": _saved.get("gx_px2", 10),
+    "gy_px2": _saved.get("gy_px2", 10),
+    "gx_divs": _saved.get("gx_divs", 2),
+    "gy_divs": _saved.get("gy_divs", 2),
+    "gx_divs2": _saved.get("gx_divs2", 2),
+    "gy_divs2": _saved.get("gy_divs2", 2),
+    "grid_use_selection": _saved.get("grid_use_selection", False),
+    "table_metric": _saved.get("table_metric", "mean"),
+    "frame_step": _saved.get("frame_step", 1),
+    "skip_gif": _saved.get("skip_gif", False),
+    "viz_crop_enabled": _saved.get("viz_crop_enabled", False),
+    # ヒートマップ選択範囲（セッション内のみ保持）
+    "_last_selection": None,
+    "_viz_last_selection": None,
 }
 for key, value in _DEFAULTS.items():
     if key not in st.session_state:
@@ -312,6 +355,48 @@ def generate_grid_rois(
     return rois
 
 
+def extract_box_selection(
+    plotly_event: object, frame: FrameData
+) -> tuple[int, int, int, int] | None:
+    """plotlyイベントからbox選択範囲を (x_min, x_max, y_min, y_max) で返す。なければNone。"""
+    if plotly_event is None or not isinstance(plotly_event, dict):
+        return None
+    sel = plotly_event.get("selection")
+    if not sel:
+        return None
+    x_lo = int(frame.x_coords.min())
+    x_hi = int(frame.x_coords.max())
+    y_lo = int(frame.y_coords.min())
+    y_hi = int(frame.y_coords.max())
+
+    # 方法1: box selection の範囲
+    if sel.get("box") and len(sel["box"]) > 0:
+        box = sel["box"][0]
+        raw_x = sorted(box.get("x", []))
+        raw_y = sorted(box.get("y", []))
+        if len(raw_x) >= 2 and len(raw_y) >= 2:
+            cx_min = max(x_lo, int(round(raw_x[0])))
+            cx_max = min(x_hi, int(round(raw_x[-1])))
+            cy_min = max(y_lo, int(round(raw_y[0])))
+            cy_max = min(y_hi, int(round(raw_y[-1])))
+            if cx_min < cx_max and cy_min < cy_max:
+                return (cx_min, cx_max, cy_min, cy_max)
+
+    # 方法2: 選択ポイントのmin/max
+    if sel.get("points") and len(sel["points"]) > 0:
+        pts = sel["points"]
+        xs = [p.get("x", 0) for p in pts if "x" in p]
+        ys = [p.get("y", 0) for p in pts if "y" in p]
+        if xs and ys:
+            cx_min = max(x_lo, int(min(xs)))
+            cx_max = min(x_hi, int(max(xs)))
+            cy_min = max(y_lo, int(min(ys)))
+            cy_max = min(y_hi, int(max(ys)))
+            if cx_min < cx_max and cy_min < cy_max:
+                return (cx_min, cx_max, cy_min, cy_max)
+    return None
+
+
 def build_plotly_heatmap(
     frame: FrameData,
     rois: list[ROI],
@@ -399,6 +484,12 @@ def build_plotly_heatmap(
         ),
         height=600,
         margin=dict(l=60, r=30, t=40, b=60),
+        # ドラッグモードを変更してしまうボタン（zoom2d/pan2d/lasso2d）を除外し、
+        # 拡大後も常に「範囲選択」モードを維持する。
+        # ズームインアウトは zoomIn2d/zoomOut2d で可能、resetScale2d で元に戻せる。
+        modebar=dict(remove=["zoom2d", "pan2d", "lasso2d"]),
+        # rerun を跨いでユーザーのズーム状態を保持する。
+        uirevision="roi_heatmap",
     )
     return fig
 
@@ -447,6 +538,8 @@ with tabs[0]:
                         st.session_state["frames"] = frames
                         st.session_state["input_dir"] = input_dir_str
                         st.session_state["session_dir"] = None
+                        # 古いCSVに紐づく分析結果は無効なのでクリア
+                        st.session_state["analysis_rows"] = []
                         # 履歴に追加（重複排除、最新を先頭に）
                         hist = [h for h in history if h != input_dir_str]
                         st.session_state["input_dir_history"] = [input_dir_str] + hist[:19]
@@ -459,15 +552,13 @@ with tabs[0]:
         st.subheader("出力")
         output_base = st.text_input(
             "出力先フォルダ（ベースディレクトリ）",
-            value=str(st.session_state["output_base"]),
+            key="output_base",
         )
         dataset_name = st.text_input(
             "データセット名（出力サブフォルダ名）",
-            value=str(st.session_state["dataset_name"]),
+            key="dataset_name",
             placeholder="例: experiment_A",
         )
-        st.session_state["output_base"] = output_base
-        st.session_state["dataset_name"] = dataset_name
         if output_base and dataset_name:
             preview_path = Path(output_base) / dataset_name / "YYYYMMDD_HHmmSS"
             st.caption(f"出力先プレビュー: `{preview_path}/`")
@@ -612,13 +703,45 @@ with tabs[1]:
                 "X・Y方向を等間隔に分割してROIを一括生成します。"
                 "分割プレビューがヒートマップ上に破線で表示されます。"
             )
-            # オフセット変更時はグリッド範囲を自動同期
-            _curr_eff = (eff_x_lo, eff_x_hi, eff_y_lo, eff_y_hi)
+
+            # ── ヒートマップ選択範囲をグリッド範囲として使うトグル ──
+            use_selection = st.checkbox(
+                "ヒートマップで選択した矩形をグリッド範囲として使う",
+                key="grid_use_selection",
+                help="ヒートマップ上でドラッグした選択範囲内でグリッド分割します。"
+                     "OFFの場合は切り出しオフセット範囲を使用します。",
+            )
+            last_sel = st.session_state.get("_last_selection")
+            if use_selection:
+                if last_sel:
+                    sel_x_lo, sel_x_hi, sel_y_lo, sel_y_hi = last_sel
+                    st.info(
+                        f"📐 選択範囲を使用: **x={sel_x_lo}–{sel_x_hi}**, "
+                        f"**y={sel_y_lo}–{sel_y_hi}**"
+                    )
+                    # 選択範囲を有効レンジに上書き
+                    target_eff = (
+                        max(x_lo, min(x_hi, sel_x_lo)),
+                        max(x_lo, min(x_hi, sel_x_hi)),
+                        max(y_lo, min(y_hi, sel_y_lo)),
+                        max(y_lo, min(y_hi, sel_y_hi)),
+                    )
+                else:
+                    st.warning(
+                        "ヒートマップ上でドラッグして矩形範囲を選択してください。"
+                        "選択前はオフセット範囲を使用します。"
+                    )
+                    target_eff = (eff_x_lo, eff_x_hi, eff_y_lo, eff_y_hi)
+            else:
+                target_eff = (eff_x_lo, eff_x_hi, eff_y_lo, eff_y_hi)
+
+            # 有効範囲が変わったらグリッド範囲入力を同期
+            _curr_eff = target_eff
             if st.session_state.get("_prev_eff_range") != _curr_eff:
-                st.session_state["gx1"] = eff_x_lo
-                st.session_state["gx2"] = eff_x_hi
-                st.session_state["gy1"] = eff_y_lo
-                st.session_state["gy2"] = eff_y_hi
+                st.session_state["gx1"] = _curr_eff[0]
+                st.session_state["gx2"] = _curr_eff[1]
+                st.session_state["gy1"] = _curr_eff[2]
+                st.session_state["gy2"] = _curr_eff[3]
                 st.session_state["_prev_eff_range"] = _curr_eff
 
             g_col1, g_col2, g_col3 = st.columns(3)
@@ -678,22 +801,32 @@ with tabs[1]:
                     d_col2.caption(f"→ Y {y_divs} 分割")
             else:
                 # ── 分割数指定モード（従来） ──
+                def _clamp(key: str, lo: int, hi: int, default: int) -> int:
+                    val = int(st.session_state.get(key, default))
+                    val = max(lo, min(val, hi))
+                    st.session_state[key] = val
+                    return val
+
                 if grid_mode == "X固定 → Y分割":
                     x_divs = 1
                     max_y = max(2, min(remaining, 10))
-                    y_divs = d_col1.slider("Y分割数", 1, max_y, value=min(2, remaining), key="gy_divs")
+                    _clamp("gy_divs", 1, max_y, min(2, remaining))
+                    y_divs = d_col1.slider("Y分割数", 1, max_y, key="gy_divs")
                 elif grid_mode == "Y固定 → X分割":
                     max_x = max(2, min(remaining, 10))
-                    x_divs = d_col1.slider("X分割数", 1, max_x, value=min(2, remaining), key="gx_divs")
+                    _clamp("gx_divs", 1, max_x, min(2, remaining))
+                    x_divs = d_col1.slider("X分割数", 1, max_x, key="gx_divs")
                     y_divs = 1
                 else:
                     max_x = max(2, min(remaining, 10))
-                    x_divs = d_col1.slider("X分割数", 1, max_x, value=min(2, max_x), key="gx_divs2")
+                    _clamp("gx_divs2", 1, max_x, min(2, max_x))
+                    x_divs = d_col1.slider("X分割数", 1, max_x, key="gx_divs2")
                     max_y = max(2, min(remaining // max(x_divs, 1), 10))
-                    y_divs = d_col2.slider("Y分割数", 1, max_y, value=min(2, max_y), key="gy_divs2")
+                    _clamp("gy_divs2", 1, max_y, min(2, max_y))
+                    y_divs = d_col2.slider("Y分割数", 1, max_y, key="gy_divs2")
 
             total_rois = x_divs * y_divs
-            grid_prefix = st.text_input("ROI名プレフィックス", value="grid", key="grid_prefix")
+            grid_prefix = st.text_input("ROI名プレフィックス", key="grid_prefix")
 
             rev_col1, rev_col2 = st.columns(2)
             reverse_x = rev_col1.checkbox("X方向を反転（Xmax→Xmin の順に分割）", key="grid_reverse_x")
@@ -793,6 +926,13 @@ with tabs[1]:
                             drawn_roi_coords = (roi_x_min, roi_x_max, roi_y_min, roi_y_max)
 
             if drawn_roi_coords:
+                # 選択範囲をグリッド範囲としても利用できるよう保存
+                prev_sel = st.session_state.get("_last_selection")
+                if prev_sel != drawn_roi_coords:
+                    st.session_state["_last_selection"] = drawn_roi_coords
+                    # グリッド範囲として使う設定ONなら即時反映
+                    if st.session_state.get("grid_use_selection"):
+                        st.rerun()
                 roi_x_min, roi_x_max, roi_y_min, roi_y_max = drawn_roi_coords
                 st.success(
                     f"選択範囲: **x={roi_x_min}–{roi_x_max}**, **y={roi_y_min}–{roi_y_max}**"
@@ -1153,6 +1293,9 @@ with tabs[2]:
                 plt.close(fig_d)
 
             # ROI オーバーレイ表示
+            # CSV再読み込み等で session_dir が消えていれば再生成して回復
+            if not st.session_state.get("session_dir"):
+                st.session_state["session_dir"] = get_or_create_session_dir()
             session_dir = Path(st.session_state["session_dir"])
             scale = compute_color_scale(frames)
             rep_frame = frames[0]
@@ -1242,13 +1385,60 @@ with tabs[3]:
 
         col_s1, col_s2 = st.columns(2)
         with col_s1:
+            _fs_max = max(1, len(frames))
+            st.session_state["frame_step"] = max(
+                1, min(int(st.session_state.get("frame_step", 1)), _fs_max)
+            )
             frame_step = st.number_input(
                 "フレームを間引く（1=全フレーム, 2=1フレームおきなど）",
-                min_value=1, max_value=max(1, len(frames)),
-                value=1, step=1,
+                min_value=1, max_value=_fs_max, step=1, key="frame_step",
             )
         with col_s2:
-            skip_gif = st.checkbox("GIFを生成しない（高速）", value=False)
+            skip_gif = st.checkbox("GIFを生成しない（高速）", key="skip_gif")
+
+        # ── 可視化範囲（矩形クロップ） ──
+        with st.expander("可視化範囲を矩形で指定", expanded=False):
+            st.caption(
+                "下のヒートマップ上でドラッグして範囲を選択すると、その領域だけを可視化できます。"
+                "（タブ②のROI選択用の矩形とは独立しています）"
+            )
+            viz_crop_enabled = st.checkbox(
+                "選択した矩形範囲のみ可視化する",
+                key="viz_crop_enabled",
+            )
+            preview_frame = frames[0]
+            viz_fig = build_plotly_heatmap(preview_frame, [], cmap, invert_y)
+            viz_event = st.plotly_chart(
+                viz_fig,
+                use_container_width=True,
+                key="viz_crop_plotly",
+                on_select="rerun",
+                selection_mode="box",
+            )
+            new_viz_sel = extract_box_selection(viz_event, preview_frame)
+            if new_viz_sel and st.session_state.get("_viz_last_selection") != new_viz_sel:
+                st.session_state["_viz_last_selection"] = new_viz_sel
+                st.rerun()
+
+            current_crop = st.session_state.get("_viz_last_selection")
+            btn_clear, btn_show = st.columns([1, 3])
+            if btn_clear.button("選択をクリア", key="viz_crop_clear"):
+                st.session_state["_viz_last_selection"] = None
+                st.rerun()
+            if current_crop:
+                cx1, cx2, cy1, cy2 = current_crop
+                btn_show.success(
+                    f"📐 選択範囲: **x={cx1}–{cx2}**, **y={cy1}–{cy2}**"
+                )
+            else:
+                btn_show.info("矩形範囲が未選択（全範囲を可視化します）")
+
+        # 実際に適用するクロップ
+        view_crop = (
+            st.session_state.get("_viz_last_selection")
+            if st.session_state.get("viz_crop_enabled")
+            else None
+        )
 
         if st.button("▶ ヒートマップを生成", type="primary"):
             selected = frames[::int(frame_step)]
@@ -1262,12 +1452,18 @@ with tabs[3]:
             rendered_paths: list[Path] = []
             for i, frame in enumerate(selected):
                 fp = frame_dir / f"heatmap_{frame.frame_index:03d}.png"
-                render_single_heatmap(frame, fp, rois, cmap, vmin, vmax, invert_y=invert_y)
+                render_single_heatmap(
+                    frame, fp, rois, cmap, vmin, vmax,
+                    invert_y=invert_y, view_crop=view_crop,
+                )
                 rendered_paths.append(fp)
                 progress.progress((i + 1) / len(selected), text=f"フレーム {frame.frame_index} 生成中…")
 
             summary_path = session_dir / "heatmap_summary.png"
-            render_heatmap_summary(selected, summary_path, rois, cmap, vmin, vmax, invert_y=invert_y)
+            render_heatmap_summary(
+                selected, summary_path, rois, cmap, vmin, vmax,
+                invert_y=invert_y, view_crop=view_crop,
+            )
             progress.progress(1.0, text="完了")
 
             if not skip_gif and rendered_paths:
@@ -1436,3 +1632,7 @@ with tabs[4]:
                     st.session_state["rois"] = loaded_rois
                     save_rois_to_file(loaded_rois)
                     st.success(f"{len(loaded_rois)} 件のROIをセッションに反映しました")
+
+
+# ── 全UI設定をsettings.iniへ保存（スクリプト末尾） ──
+save_settings(st.session_state)

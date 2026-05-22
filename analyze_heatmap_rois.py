@@ -546,6 +546,22 @@ def compute_color_scale(frames: Iterable[FrameData]) -> tuple[float, float]:
     return float(np.nanmin(stacked)), float(np.nanmax(stacked))
 
 
+def _apply_view_crop(
+    ax,
+    crop: tuple[int, int, int, int] | None,
+    invert_y: bool,
+) -> None:
+    """指定範囲のみが見えるようにaxis limitを設定する。"""
+    if crop is None:
+        return
+    x1, x2, y1, y2 = crop
+    ax.set_xlim(x1 - 0.5, x2 + 0.5)
+    if invert_y:
+        ax.set_ylim(y2 + 0.5, y1 - 0.5)
+    else:
+        ax.set_ylim(y1 - 0.5, y2 + 0.5)
+
+
 def render_single_heatmap(
     frame: FrameData,
     output_path: Path,
@@ -554,11 +570,13 @@ def render_single_heatmap(
     vmin: float,
     vmax: float,
     invert_y: bool = False,
+    view_crop: tuple[int, int, int, int] | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 6))
     draw_heatmap(ax, frame, cmap, vmin, vmax, invert_y=invert_y)
     if rois:
         draw_roi_overlays(ax, rois)
+    _apply_view_crop(ax, view_crop, invert_y)
     ax.set_title(build_frame_title(frame))
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +592,7 @@ def render_heatmap_summary(
     vmin: float,
     vmax: float,
     invert_y: bool = False,
+    view_crop: tuple[int, int, int, int] | None = None,
 ) -> None:
     display_frames = frames[: min(len(frames), 9)]
     columns = min(3, len(display_frames))
@@ -585,6 +604,7 @@ def render_heatmap_summary(
         draw_heatmap(axis, frame, cmap, vmin, vmax, invert_y=invert_y)
         if rois:
             draw_roi_overlays(axis, rois)
+        _apply_view_crop(axis, view_crop, invert_y)
         axis.set_title(build_frame_title(frame))
 
     for axis in flat_axes[len(display_frames):]:
